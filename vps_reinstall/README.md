@@ -25,7 +25,7 @@
 在已备份并确认可以清空系统盘的测试实例上，以 root 在交互终端执行：
 
 ```sh
-curl -fsSL https://github.com/ikuaiapp/ikuai-plus/releases/download/vps-reinstall-3.7.16-tencent-debian12-20261031/quick.sh | bash
+curl -fsSL https://github.com/ikuaiapp/ikuai-plus/releases/download/vps-reinstall-3.7.16-multivps-20261031/quick.sh | bash
 ```
 
 脚本会校验下载的源码包及镜像清单，再显示即将清空的磁盘。腾讯云私网 DHCP/公网 NAT 实例会读取并核对腾讯云元数据；其他实例走通用直连预检，要求地址与同网段网关可可靠识别。密码可以输入并确认两次；任一步骤 30 秒未输入则自动生成一组 10 位密码并打印在终端。救援 SSH（root，端口 22）和爱快 Web 管理员使用同一组密码；目标爱快的 SSH 默认关闭。输入 `ERASE /dev/设备名` 后才开始准备救援启动；随后自动重启，校验镜像后清空所选磁盘。救援期间的进度网页使用检测到的真实公网 IP。请事先确认 TCP 443 已在云厂商防火墙和系统防火墙放行。
@@ -34,7 +34,7 @@ curl -fsSL https://github.com/ikuaiapp/ikuai-plus/releases/download/vps-reinstal
 
 ```sh
 python3 vps_reinstall/install.py \
-  --manifest-url https://github.com/ikuaiapp/ikuai-plus/releases/download/vps-reinstall-3.7.16-preview-20261030/ikuai-cloud-v1-manifest.json \
+  --manifest-url https://github.com/ikuaiapp/ikuai-plus/releases/download/vps-reinstall-3.7.16-multivps-20261031/ikuai-cloud-v1-manifest.json \
   --manifest-sha256 c5a8168c3297517d4ed69c04c7c68179a37bf99f6952814fd2ffcc6fcc993d2f
 # 先核对预检结果和所选磁盘；确认无误后才添加 --execute。
 ```
