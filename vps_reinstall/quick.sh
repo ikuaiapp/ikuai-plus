@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $(id -u) -ne 0 ]]; then
+  echo 'Run as root on the VPS host.' >&2
+  exit 1
+fi
+for tool in curl sha256sum tar python3; do
+  command -v "$tool" >/dev/null || { echo "Missing required tool: $tool" >&2; exit 1; }
+done
+if [[ ! -r /dev/tty ]]; then
+  echo 'An interactive terminal is required for the disk confirmation.' >&2
+  exit 1
+fi
+
+release='https://github.com/ikuaiapp/ikuai-plus/releases/download/vps-reinstall-3.7.16-tencent-debian12-20261030'
+source_sha='dc30061654343a4fd1f06552ddcd189ee6df425c5c7a67a14f7b115213838454'
+manifest_sha='c5a8168c3297517d4ed69c04c7c68179a37bf99f6952814fd2ffcc6fcc993d2f'
+public_ip=$(curl --noproxy '*' -fsS --max-time 5 http://169.254.0.23/latest/meta-data/public-ipv4)
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+curl -fL --retry 3 --connect-timeout 10 --max-time 180 -o "$tmp/source.tar.gz" "$release/ikuai-vps-reinstall-source.tar.gz"
+printf '%s  %s\n' "$source_sha" "$tmp/source.tar.gz" | sha256sum -c -
+tar -xzf "$tmp/source.tar.gz" -C "$tmp"
+python3 "$tmp/vps_reinstall/install.py" \
+  --manifest-url "$release/ikuai-cloud-v1-manifest.json" \
+  --manifest-sha256 "$manifest_sha" \
+  --tencent-nat-public-ip "$public_ip" --execute </dev/tty

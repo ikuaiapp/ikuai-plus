@@ -7,7 +7,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from install import execute, image_from_manifest, preflight, select_disk, verify_tencent_nat
+from install import (confirmed_ifupdown_dhcp, execute, image_from_manifest,
+                     preflight, require_web_password, select_disk, verify_tencent_nat)
 from stage_rescue import patch_trans, stage
 
 
@@ -21,6 +22,57 @@ def block_fixture():
 
 
 class InstallerTests(unittest.TestCase):
+    def test_dhcp_client_and_cloud_init_must_agree_on_interface(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config = root / "50-cloud-init"
+            config.write_text("auto eth0\niface eth0 inet dhcp\n")
+            (root / "dhclient.eth0.pid").write_text("513\n")
+            proc = root / "proc"
+            (proc / "513").mkdir(parents=True)
+            (proc / "513" / "cmdline").write_bytes(
+                b"/sbin/dhclient\0-4\0-pf\0/run/dhclient.eth0.pid\0eth0\0")
+            self.assertTrue(confirmed_ifupdown_dhcp("eth0", config, root, proc))
+            self.assertFalse(confirmed_ifupdown_dhcp("eth1", config, root, proc))
+            config.write_text("iface eth0 inet static\n")
+            self.assertFalse(confirmed_ifupdown_dhcp("eth0", config, root, proc))
+
+    def test_short_password_is_reused_for_rescue_and_web(self):
+        with patch("install.timed_getpass", side_effect=["Abcde12345", "Abcde12345"]):
+            password = require_web_password()
+        self.assertEqual(password, "Abcde12345")
+        with patch("install.timed_getpass", side_effect=["short", "short"]):
+            with self.assertRaisesRegex(ValueError, "10"):
+                require_web_password()
+
+        preview = {"disk": "/dev/vda", "boot_mode": "bios", "network": {"mode": "dhcp"}}
+        image = {"raw_sha256": "a" * 64, "sha256": "b" * 64}
+        captured = {}
+
+        def record_run(*args, **kwargs):
+            if args[0][0] == "bash":
+                captured["rescue"] = kwargs["env"]["IKUAI_RESCUE_PASSWORD"]
+                captured["profile"] = json.loads(Path(kwargs["env"]["IKUAI_PROFILE"]).read_text())
+
+        with patch("install.os.geteuid", return_value=0), \
+             patch("install.stage", side_effect=lambda path: path), \
+             patch("install.subprocess.run", side_effect=record_run):
+            execute(preview, "https://example.invalid/image.gz", image, password)
+        self.assertEqual(captured["rescue"], password)
+        self.assertEqual(captured["profile"]["web_password_md5"],
+                         hashlib.md5(password.encode()).hexdigest())
+        self.assertNotIn(password, json.dumps(captured["profile"]))
+
+    def test_password_prompt_timeout_generates_visible_ten_character_password(self):
+        for replies in ([TimeoutError()], ["Abcde12345", TimeoutError()]):
+            with self.subTest(replies=replies), \
+                 patch("install.timed_getpass", side_effect=replies), \
+                 patch("install.generate_password", return_value="Qr7Stu8Vw9"), \
+                 patch("builtins.print") as output:
+                password = require_web_password()
+                self.assertEqual(password, "Qr7Stu8Vw9")
+                self.assertIn("Qr7Stu8Vw9", str(output.call_args_list))
+
     def test_tencent_nat_metadata_must_match_network_and_expected_public_ip(self):
         network = {"mac": "52:54:00:12:34:56", "mode": "dhcp",
                    "address": "10.3.0.2", "prefix": 22, "gateway": "10.3.0.1"}

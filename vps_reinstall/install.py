@@ -12,7 +12,9 @@ import json
 import os
 import re
 import secrets
+import signal
 import stat
+import string
 import subprocess
 import sys
 import tempfile
@@ -90,6 +92,25 @@ def verify_tencent_nat(network, expected_public_ip):
     return public
 
 
+def confirmed_ifupdown_dhcp(dev, config=Path("/etc/network/interfaces.d/50-cloud-init"),
+                            run_dir=Path("/run"), proc_dir=Path("/proc")):
+    if not isinstance(dev, str) or not re.fullmatch(r"[a-zA-Z0-9_.-]{1,15}", dev):
+        return False
+    try:
+        matches = [line.split() for line in config.read_text().splitlines()
+                   if line.split()[:2] == ["iface", dev]]
+        if matches != [["iface", dev, "inet", "dhcp"]]:
+            return False
+        pid = int((run_dir / f"dhclient.{dev}.pid").read_text().strip())
+        if pid <= 1:
+            return False
+        args = [arg for arg in (proc_dir / str(pid) / "cmdline").read_bytes().split(b"\0") if arg]
+        return bool(args and Path(os.fsdecode(args[0])).name == "dhclient" and
+                    args[-1] == os.fsencode(dev))
+    except (OSError, UnicodeError, ValueError):
+        return False
+
+
 def preflight(*, allow_test_ip=False, tencent_nat_public_ip=None):
     if os.uname().machine != "x86_64" or sys.platform != "linux":
         raise ValueError("only x86-64 Linux sources are supported")
@@ -100,8 +121,11 @@ def preflight(*, allow_test_ip=False, tencent_nat_public_ip=None):
     mode = "uefi" if Path("/sys/firmware/efi").exists() else "bios"
     addresses = command_json("ip", "-j", "addr", "show")
     routes = command_json("ip", "-j", "-4", "route", "show", "default")
+    route_dev = next((route.get("dev") for route in routes if route.get("dst") == "default"), None)
     network = select_network(addresses, routes, allow_test_ip=allow_test_ip,
-                             allow_cloud_nat_dhcp=bool(tencent_nat_public_ip))
+                             allow_cloud_nat_dhcp=bool(tencent_nat_public_ip),
+                             dhcp_source_confirmed=(bool(tencent_nat_public_ip) and
+                                                    confirmed_ifupdown_dhcp(route_dev)))
     public_ip = None
     if tencent_nat_public_ip:
         public_ip = verify_tencent_nat(vars(network), tencent_nat_public_ip)
@@ -155,18 +179,47 @@ def image_from_manifest(manifest_url, manifest, mode):
     return base + "/" + name, entry
 
 
+def timed_getpass(prompt):
+    def timeout(_signum, _frame):
+        raise TimeoutError("password input timed out")
+
+    old_handler = signal.signal(signal.SIGALRM, timeout)
+    try:
+        signal.alarm(30)
+        return getpass.getpass(prompt)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
+
+
+def generate_password():
+    alphabet = string.ascii_letters + string.digits
+    while True:
+        password = "".join(secrets.choice(alphabet) for _ in range(10))
+        if any(char.isalpha() for char in password) and any(char.isdigit() for char in password):
+            return password
+
+
 def require_web_password():
-    first = getpass.getpass("New iKuai Web admin password (at least 16 characters): ")
-    second = getpass.getpass("Repeat Web password: ")
-    if first != second or len(first) < 16 or len(first.encode()) > 64:
-        raise ValueError("Web passwords differ or are outside the 16-64 byte range")
-    return hashlib.md5(first.encode()).hexdigest()
+    try:
+        first = timed_getpass("New iKuai Web admin and rescue SSH password (10 chars; 30s timeout): ")
+        second = timed_getpass("Repeat password (30s timeout): ")
+    except TimeoutError:
+        password = generate_password()
+        print(f"No password entered within 30 seconds; generated Web admin and rescue SSH password: {password}", flush=True)
+        return password
+    if (first != second or len(first) != 10 or not first.isascii() or
+            not first.isprintable() or not any(char.isalpha() for char in first) or
+            not any(char.isdigit() for char in first)):
+        raise ValueError("passwords must match and contain exactly 10 visible ASCII characters, including letters and digits")
+    return first
 
 
-def execute(preview, image_url, image, web_md5):
+def execute(preview, image_url, image, password):
     if os.geteuid() != 0:
         raise PermissionError("--execute requires root")
-    rescue_password = secrets.token_urlsafe(24)
+    rescue_password = password
+    web_md5 = hashlib.md5(password.encode()).hexdigest()
     with tempfile.TemporaryDirectory(prefix="ikuai-vps-stage-") as directory:
         root = Path(directory)
         vendor = stage(root / "vendor")
@@ -186,7 +239,7 @@ def execute(preview, image_url, image, web_md5):
                    IKUAI_BOOT_MODE=payload["boot_mode"],
                    IKUAI_COMPRESSED_SHA256=image["sha256"],
                    IKUAI_RESCUE_PASSWORD=rescue_password)
-        print(f"Rescue SSH user: root; one-time password: {rescue_password}", flush=True)
+        print("Rescue SSH user: root; password: same as the new iKuai Web admin password", flush=True)
         print("Rescue will reboot once, download and verify the image, write the selected disk, "
               "configure WAN/Web, then reboot. A failure leaves rescue SSH active.", flush=True)
         subprocess.run(["bash", str(vendor / "reinstall.sh"), "dd", "--img", image_url,
@@ -213,11 +266,11 @@ def main():
     if not args.execute:
         print("Preflight only: no reboot or disk write. Use --execute to continue.")
         return
-    web_md5 = require_web_password()
+    password = require_web_password()
     answer = input(f"Type ERASE {preview['disk']} to destroy that disk and stage rescue: ")
     if answer != f"ERASE {preview['disk']}":
         raise ValueError("confirmation did not match; no changes made")
-    execute(preview, image_url, image, web_md5)
+    execute(preview, image_url, image, password)
 
 
 if __name__ == "__main__":

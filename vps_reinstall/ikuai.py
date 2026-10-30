@@ -18,7 +18,8 @@ class NetworkProfile:
     gateway: str
 
 
-def select_network(addresses, routes, *, allow_test_ip=False, allow_cloud_nat_dhcp=False):
+def select_network(addresses, routes, *, allow_test_ip=False, allow_cloud_nat_dhcp=False,
+                   dhcp_source_confirmed=False):
     defaults = [route for route in routes if route.get("dst") == "default"]
     if len(defaults) != 1:
         raise ValueError("expected exactly one IPv4 default route")
@@ -36,8 +37,9 @@ def select_network(addresses, routes, *, allow_test_ip=False, allow_cloud_nat_dh
         raise ValueError("unsupported IPv4 prefix; /31 and /32 require provider-specific routing")
     local = ipaddress.IPv4Address(address["local"])
     if allow_cloud_nat_dhcp:
-        if not local.is_private or route.get("protocol") != "dhcp":
-            raise ValueError("cloud NAT requires a private IPv4 address and a DHCP route")
+        if (not local.is_private or route.get("protocol") not in (None, "dhcp") or
+                not (route.get("protocol") == "dhcp" or dhcp_source_confirmed)):
+            raise ValueError("cloud NAT requires a private IPv4 address and verified DHCP source")
     elif not allow_test_ip and not local.is_global:
         raise ValueError("source IPv4 is not public; a 1:1 NAT/cloud route needs manual support")
     gateway = ipaddress.IPv4Address(route["gateway"])
@@ -54,7 +56,8 @@ def select_network(addresses, routes, *, allow_test_ip=False, allow_cloud_nat_dh
     dhcp_route = route.get("protocol") == "dhcp"
     if dynamic != dhcp_route and not allow_cloud_nat_dhcp:
         raise ValueError("DHCP/static source network state is ambiguous")
-    return NetworkProfile(mac, "dhcp" if dhcp_route else "static", str(local), prefix, str(gateway))
+    mode = "dhcp" if dhcp_route or (allow_cloud_nat_dhcp and dhcp_source_confirmed) else "static"
+    return NetworkProfile(mac, mode, str(local), prefix, str(gateway))
 
 
 def provision_database(path, profile, password_md5, https_port=443):
