@@ -1,0 +1,224 @@
+"""Preflight a Linux VPS, then stage a verified iKuai rescue reinstall.
+
+Preflight is read-only. The explicit --execute path stages a rescue boot on the
+source disk; the second stage rewrites the disk only after image verification.
+"""
+
+import argparse
+import getpass
+import hashlib
+import ipaddress
+import json
+import os
+import re
+import secrets
+import stat
+import subprocess
+import sys
+import tempfile
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+from ikuai import select_network
+from stage_rescue import HERE, stage
+
+
+def command_json(*args):
+    return json.loads(subprocess.check_output(args, text=True))
+
+
+def walk_blockdev(nodes):
+    for node in nodes:
+        yield node
+        yield from walk_blockdev(node.get("children") or [])
+
+
+def select_disk(blocks, boot_mode):
+    nodes = list(walk_blockdev(blocks["blockdevices"]))
+    roots = [n for n in nodes if "/" in (n.get("mountpoints") or [])]
+    if len(roots) != 1 or roots[0].get("type") != "part":
+        raise ValueError("root filesystem must be on one plain disk partition")
+    by_name = {n["name"]: n for n in nodes}
+    root = roots[0]
+    parent = by_name.get(root.get("pkname"))
+    if not parent or parent.get("type") != "disk":
+        raise ValueError("LVM, RAID, and nested boot disks are not supported")
+    if boot_mode == "uefi":
+        esp = [n for n in nodes if "/boot/efi" in (n.get("mountpoints") or [])]
+        if len(esp) != 1 or esp[0].get("pkname") != parent["name"]:
+            raise ValueError("UEFI system partition is not on the system disk")
+    size = int(parent["size"])
+    if size < 8 * 1024**3 or size > 2 * 1024**4:
+        raise ValueError("system disk must be 8 GiB through 2 TiB")
+    if int(parent["log-sec"]) != 512:
+        raise ValueError("only 512-byte logical sectors are supported")
+    path = parent["path"]
+    if not re.fullmatch(r"/dev/[a-zA-Z0-9_-]+", path):
+        raise ValueError("unexpected system disk path")
+    return path, size
+
+
+def tencent_metadata(key):
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(f"http://169.254.0.23/latest/meta-data/{key}", timeout=3) as response:
+        if response.geturl() != f"http://169.254.0.23/latest/meta-data/{key}":
+            raise ValueError("Tencent metadata redirected")
+        value = response.read(257)
+    if len(value) > 256:
+        raise ValueError("Tencent metadata value is too long")
+    return value.decode("ascii").strip()
+
+
+def external_ipv4():
+    with urllib.request.urlopen("https://api.ipify.org?format=json", timeout=10) as response:
+        return str(ipaddress.IPv4Address(json.loads(response.read(256))["ip"]))
+
+
+def verify_tencent_nat(network, expected_public_ip):
+    expected = ipaddress.IPv4Address(expected_public_ip)
+    if not expected.is_global or network["mode"] != "dhcp":
+        raise ValueError("Tencent NAT requires a public IP and DHCP WAN")
+    public = tencent_metadata("public-ipv4")
+    if public != str(expected) or external_ipv4() != str(expected):
+        raise ValueError("Tencent public IP metadata or egress does not match expected public IP")
+    if tencent_metadata("local-ipv4") != network["address"]:
+        raise ValueError("Tencent private IP metadata does not match the default route NIC")
+    macs = tencent_metadata("network/interfaces/macs/").splitlines()
+    if network["mac"] + "/" not in macs:
+        raise ValueError("Tencent NIC MAC metadata does not match the default route NIC")
+    return public
+
+
+def preflight(*, allow_test_ip=False, tencent_nat_public_ip=None):
+    if os.uname().machine != "x86_64" or sys.platform != "linux":
+        raise ValueError("only x86-64 Linux sources are supported")
+    if os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") < 1024**3:
+        raise ValueError("rescue stage requires at least 1 GiB of RAM")
+    if Path("/.dockerenv").exists() or Path("/run/.containerenv").exists():
+        raise ValueError("run on the VPS host, not inside a container")
+    mode = "uefi" if Path("/sys/firmware/efi").exists() else "bios"
+    addresses = command_json("ip", "-j", "addr", "show")
+    routes = command_json("ip", "-j", "-4", "route", "show", "default")
+    network = select_network(addresses, routes, allow_test_ip=allow_test_ip,
+                             allow_cloud_nat_dhcp=bool(tencent_nat_public_ip))
+    public_ip = None
+    if tencent_nat_public_ip:
+        public_ip = verify_tencent_nat(vars(network), tencent_nat_public_ip)
+    elif not allow_test_ip:
+        public_ip = external_ipv4()
+        if public_ip != network.address:
+            raise ValueError("external IPv4 differs from the NIC address; NAT or proxy is unsupported")
+    dev = next(route["dev"] for route in routes if route.get("dst") == "default")
+    if not Path("/sys/class/net", dev, "device").exists():
+        raise ValueError("default route is not on a physical or paravirtual NIC")
+    blocks = command_json("lsblk", "-b", "-J", "-o",
+                          "NAME,TYPE,PATH,PKNAME,SIZE,LOG-SEC,MOUNTPOINTS")
+    disk, size = select_disk(blocks, mode)
+    if not stat.S_ISBLK(os.stat(disk).st_mode):
+        raise ValueError("selected system disk is not a block device")
+    return {"boot_mode": mode, "disk": disk, "disk_bytes": size,
+            "nic": dev, "network": vars(network), "public_ip": public_ip,
+            "provider": "tencent-nat" if tencent_nat_public_ip else "direct"}
+
+
+def load_manifest(url, expected_sha256):
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https" or parsed.hostname != "github.com":
+        raise ValueError("manifest must be served over HTTPS by GitHub Releases")
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
+        raise ValueError("manifest SHA-256 is required")
+    with urllib.request.urlopen(url, timeout=30) as response:
+        if urllib.parse.urlparse(response.geturl()).scheme != "https":
+            raise ValueError("manifest redirected away from HTTPS")
+        payload = response.read(1024 * 1024 + 1)
+    if len(payload) > 1024 * 1024 or hashlib.sha256(payload).hexdigest() != expected_sha256:
+        raise ValueError("manifest failed SHA-256 or size validation")
+    manifest = json.loads(payload)
+    if manifest.get("format") != "ikuai-cloud-v1":
+        raise ValueError("unknown image manifest format")
+    return manifest
+
+
+def image_from_manifest(manifest_url, manifest, mode):
+    entry = manifest["images"][mode]
+    name = entry["filename"]
+    if not re.fullmatch(r"ikuai-3\.7\.16-(?:bios|uefi)\.raw\.gz", name):
+        raise ValueError("unexpected image asset name")
+    if mode not in name or not re.fullmatch(r"[0-9a-f]{64}", entry["sha256"]):
+        raise ValueError("image manifest mode or compressed digest mismatch")
+    if not re.fullmatch(r"[0-9a-f]{64}", entry["raw_sha256"]):
+        raise ValueError("raw image digest is missing")
+    base = manifest_url.rsplit("/", 1)[0]
+    if not re.fullmatch(r"https://github\.com/[^/]+/[^/]+/releases/download/[^/]+", base):
+        raise ValueError("unexpected GitHub Release path")
+    return base + "/" + name, entry
+
+
+def require_web_password():
+    first = getpass.getpass("New iKuai Web admin password (at least 16 characters): ")
+    second = getpass.getpass("Repeat Web password: ")
+    if first != second or len(first) < 16 or len(first.encode()) > 64:
+        raise ValueError("Web passwords differ or are outside the 16-64 byte range")
+    return hashlib.md5(first.encode()).hexdigest()
+
+
+def execute(preview, image_url, image, web_md5):
+    if os.geteuid() != 0:
+        raise PermissionError("--execute requires root")
+    rescue_password = secrets.token_urlsafe(24)
+    with tempfile.TemporaryDirectory(prefix="ikuai-vps-stage-") as directory:
+        root = Path(directory)
+        vendor = stage(root / "vendor")
+        profile = root / "profile.json"
+        payload = {"disk_basename": Path(preview["disk"]).name,
+                   "boot_mode": preview["boot_mode"],
+                   "raw_sha256": image["raw_sha256"],
+                   "network": preview["network"],
+                   "web_password_md5": web_md5}
+        profile.write_text(json.dumps(payload))
+        profile.chmod(0o600)
+        env = os.environ.copy()
+        env.update(IKUAI_VENDOR_DIR=str(vendor), IKUAI_PROFILE=str(profile),
+                   IKUAI_APPLY=str(HERE / "apply_profile.py"),
+                   IKUAI_LIB=str(HERE / "ikuai.py"),
+                   IKUAI_DISK_BASENAME=payload["disk_basename"],
+                   IKUAI_BOOT_MODE=payload["boot_mode"],
+                   IKUAI_COMPRESSED_SHA256=image["sha256"],
+                   IKUAI_RESCUE_PASSWORD=rescue_password)
+        print(f"Rescue SSH user: root; one-time password: {rescue_password}", flush=True)
+        print("Rescue will reboot once, download and verify the image, write the selected disk, "
+              "configure WAN/Web, then reboot. A failure leaves rescue SSH active.", flush=True)
+        subprocess.run(["bash", str(vendor / "reinstall.sh"), "dd", "--img", image_url,
+                        "--target-disk", preview["disk"], "--hold", "2"],
+                       env=env, check=True)
+        subprocess.run(["reboot"], check=True)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--manifest-url", required=True)
+    parser.add_argument("--manifest-sha256", required=True)
+    parser.add_argument("--execute", action="store_true",
+                        help="confirm and stage an irreversible system-disk rewrite")
+    parser.add_argument("--tencent-nat-public-ip",
+                        help="opt in to Tencent Cloud DHCP/NAT after metadata and public IP checks")
+    args = parser.parse_args()
+    preview = preflight(tencent_nat_public_ip=args.tencent_nat_public_ip)
+    manifest = load_manifest(args.manifest_url, args.manifest_sha256)
+    image_url, image = image_from_manifest(args.manifest_url, manifest, preview["boot_mode"])
+    print(json.dumps({"preflight": preview, "image": image_url,
+                      "compressed_sha256": image["sha256"]}, indent=2, ensure_ascii=False))
+    print("Confirm the cloud security group allows inbound TCP 443 to this VPS.")
+    if not args.execute:
+        print("Preflight only: no reboot or disk write. Use --execute to continue.")
+        return
+    web_md5 = require_web_password()
+    answer = input(f"Type ERASE {preview['disk']} to destroy that disk and stage rescue: ")
+    if answer != f"ERASE {preview['disk']}":
+        raise ValueError("confirmation did not match; no changes made")
+    execute(preview, image_url, image, web_md5)
+
+
+if __name__ == "__main__":
+    main()

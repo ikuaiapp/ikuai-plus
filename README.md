@@ -21,3 +21,7 @@ iKuai 路由功能增强方案：专注于 Docker 环境下的**一机一号**�
 * **📦 系统镜像化**：提供在官方系统初始化基础上，集成 Docker Web 管理界面的完整磁盘镜像。
 * **💾 快速迁移**：通过磁盘压缩技术，实现一键打包分发，支持在云端（ECS/Lighthouse）与本地物理机/虚拟机间快速部署。
 * **⚡ 极致部署**：无需重复配置，导入镜像即可获得开箱即用的容器管理环境。
+
+### VPS 重装预览版
+
+[爱快 3.7.16 无 VNC 重装脚本与安全说明](vps_reinstall/README.md)支持单盘 x86-64 Linux VPS，并增加了需显式启用、核对腾讯云元数据的私网 DHCP/NAT 模式。磁盘镜像和校验值见 [腾讯云适配预览版 Release](https://github.com/ikuaiapp/ikuai-plus/releases/tag/vps-reinstall-3.7.16-tencent-preview-20261030)。执行会清空系统盘；请先阅读限制条件并保留云厂商救援入口。`vps_reinstall/vendor/` 中上游救援脚本遵循其自身的 GPL-3.0 许可。
