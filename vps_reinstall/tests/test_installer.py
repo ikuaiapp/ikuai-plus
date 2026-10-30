@@ -9,7 +9,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from install import (confirmed_ifupdown_dhcp, execute, image_from_manifest,
                      preflight, require_web_password, select_disk, verify_tencent_nat)
-from stage_rescue import patch_trans, stage
+from stage_rescue import patch_reinstall, patch_trans, stage
 
 
 def block_fixture():
@@ -22,6 +22,16 @@ def block_fixture():
 
 
 class InstallerTests(unittest.TestCase):
+    def test_rescue_messages_describe_ikuai_password_and_erase_stage(self):
+        source = (Path(__file__).resolve().parents[1] / "vendor/reinstall.sh").read_text()
+        patched = patch_reinstall(source)
+        self.assertIn("救援 SSH：root，端口 22", patched)
+        self.assertIn("账号 admin，密码与救援 SSH 相同", patched)
+        self.assertIn("新系统 SSH 默认关闭", patched)
+        self.assertIn("此阶段不再提供取消命令", patched)
+        self.assertIn('IKUAI_PUBLIC_IP:-IP', patched)
+        self.assertNotIn("镜像的用户名/密码/公钥不会被修改。", patched)
+
     def test_dhcp_client_and_cloud_init_must_agree_on_interface(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -144,7 +154,6 @@ class InstallerTests(unittest.TestCase):
             self.assertNotIn("https://cnb.cool/bin456789/reinstall/-/git/raw/main", reinstall)
             self.assertIn("17fbd3efd16f2e7cb1b945f06423b37399ba7d5ac8cdd3665e7f13f363500e85", reinstall)
             self.assertIn("41d55a3fd650c99f5fa2a9dfed1eff3b441186831fd4f8d2223f717d8a28217d", reinstall)
-            self.assertIn('if [ -f /configs/ikuai-profile.json ]; then return; fi', trans)
             self.assertIn("gzip -dc /tmp/ikuai.raw.gz | dd of=/dev/$xda bs=4M conv=fsync status=none", trans)
             self.assertIn('if [ -f /configs/ikuai-profile.json ]; then printf "%s\\n" /dev/console; return; fi', trans)
             self.assertIn('IKUAI_BOOT_MODE" = uefi', reinstall)
@@ -155,6 +164,36 @@ class InstallerTests(unittest.TestCase):
             self.assertIn('test -f /tmp/ikuai-efi-check/EFI/BOOT/BOOTX64.EFI', trans)
             self.assertIn('efibootmgr --create --disk "/dev/$xda" --part 1', trans)
             self.assertIn('read -r -p \'[y/N]: \'', reinstall)
+
+    def test_rescue_web_viewer_is_staged_and_prints_public_address(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = stage(Path(temp) / "vendor")
+            trans = (directory / "trans.sh").read_text()
+            reinstall = (directory / "reinstall.sh").read_text()
+            page = (Path(__file__).resolve().parents[1] / "rescue_logviewer.html").read_text()
+            self.assertIn("new WebSocket", page)
+            self.assertIn('cp /configs/rescue_logviewer.html "/tmp/web$web_path"', trans)
+            self.assertNotIn('if [ -f /configs/ikuai-profile.json ]; then return; fi\n    total_ram=', trans)
+            self.assertIn('IKUAI_PUBLIC_IP:-IP', reinstall)
+            self.assertIn('cp "$IKUAI_LOGVIEWER" $initrd_dir/configs/rescue_logviewer.html', reinstall)
+
+        preview = {"disk": "/dev/vda", "boot_mode": "bios", "public_ip": "8.8.8.8",
+                   "network": {"mode": "dhcp"}}
+        image = {"raw_sha256": "a" * 64, "sha256": "b" * 64}
+        captured = {}
+
+        def record_run(*args, **kwargs):
+            if args[0][0] == "bash":
+                captured["command"] = args[0]
+                captured["environment"] = kwargs["env"]
+
+        with patch("install.os.geteuid", return_value=0), \
+             patch("install.stage", side_effect=lambda path: path), \
+             patch("install.subprocess.run", side_effect=record_run):
+            execute(preview, "https://example.invalid/image.gz", image, "Abcde12345")
+        self.assertEqual(captured["environment"]["IKUAI_PUBLIC_IP"], "8.8.8.8")
+        self.assertIn("--web-port", captured["command"])
+        self.assertEqual(captured["command"][captured["command"].index("--web-port") + 1], "443")
 
     def test_execute_reboots_only_after_successful_staging(self):
         preview = {"disk": "/dev/vda", "boot_mode": "bios", "network": {"mode": "dhcp"}}

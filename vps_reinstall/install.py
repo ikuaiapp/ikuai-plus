@@ -235,6 +235,8 @@ def execute(preview, image_url, image, password):
         env.update(IKUAI_VENDOR_DIR=str(vendor), IKUAI_PROFILE=str(profile),
                    IKUAI_APPLY=str(HERE / "apply_profile.py"),
                    IKUAI_LIB=str(HERE / "ikuai.py"),
+                   IKUAI_LOGVIEWER=str(HERE / "rescue_logviewer.html"),
+                   IKUAI_PUBLIC_IP=preview.get("public_ip") or "",
                    IKUAI_DISK_BASENAME=payload["disk_basename"],
                    IKUAI_BOOT_MODE=payload["boot_mode"],
                    IKUAI_COMPRESSED_SHA256=image["sha256"],
@@ -243,7 +245,7 @@ def execute(preview, image_url, image, password):
         print("Rescue will reboot once, download and verify the image, write the selected disk, "
               "configure WAN/Web, then reboot. A failure leaves rescue SSH active.", flush=True)
         subprocess.run(["bash", str(vendor / "reinstall.sh"), "dd", "--img", image_url,
-                        "--target-disk", preview["disk"], "--hold", "2"],
+                        "--target-disk", preview["disk"], "--web-port", "443", "--hold", "2"],
                        env=env, check=True)
         subprocess.run(["reboot"], check=True)
 

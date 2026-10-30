@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>爱快重装进度</title>
+<style>
+  body { margin: 1rem; background: #111827; color: #e5e7eb; font: 14px/1.5 system-ui,sans-serif; }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #030712; padding: 1rem; min-height: 50vh; }
+</style>
+<h1>爱快重装进度</h1>
+<p id="status">正在连接救援日志…</p>
+<pre id="log"></pre>
+<script>
+const status = document.getElementById('status');
+const log = document.getElementById('log');
+const socket = new WebSocket('ws://' + location.host + location.pathname);
+socket.onopen = () => { status.textContent = '救援日志已连接'; };
+socket.onmessage = event => {
+  log.textContent = (log.textContent + event.data + '\n').slice(-200000);
+  window.scrollTo(0, document.body.scrollHeight);
+};
+socket.onclose = () => { status.textContent = '连接已关闭；设备可能正在重启'; };
+socket.onerror = () => { status.textContent = '日志连接失败，请检查云安全组 TCP 443'; };
+</script>
+</html>

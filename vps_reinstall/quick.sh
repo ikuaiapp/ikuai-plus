@@ -14,9 +14,15 @@ if [[ ! -r /dev/tty ]]; then
 fi
 
 release='https://github.com/ikuaiapp/ikuai-plus/releases/download/vps-reinstall-3.7.16-tencent-debian12-20261031'
-source_sha='12258828d3b605509101d409260fefab5ddf910213e772bff8693d8703a8d1fd'
+source_sha='7f561409bd43f1681a4bb123b1395fb39c5550d0724091d0ea053f751f8af14b'
 manifest_sha='c5a8168c3297517d4ed69c04c7c68179a37bf99f6952814fd2ffcc6fcc993d2f'
-public_ip=$(curl --noproxy '*' -fsS --max-time 5 http://169.254.0.23/latest/meta-data/public-ipv4)
+provider_args=()
+if public_ip=$(curl --noproxy '*' -fsS --max-time 3 \
+    http://169.254.0.23/latest/meta-data/public-ipv4 2>/dev/null); then
+  # The installer independently checks Tencent metadata, WAN MAC, private IP,
+  # and public egress before accepting this NAT mode.
+  provider_args=(--tencent-nat-public-ip "$public_ip")
+fi
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 curl -fL --retry 3 --connect-timeout 10 --max-time 180 -o "$tmp/source.tar.gz" "$release/ikuai-vps-reinstall-source.tar.gz"
@@ -25,4 +31,4 @@ tar -xzf "$tmp/source.tar.gz" -C "$tmp"
 python3 "$tmp/vps_reinstall/install.py" \
   --manifest-url "$release/ikuai-cloud-v1-manifest.json" \
   --manifest-sha256 "$manifest_sha" \
-  --tencent-nat-public-ip "$public_ip" --execute </dev/tty
+  "${provider_args[@]}" --execute </dev/tty

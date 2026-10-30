@@ -25,6 +25,54 @@ def replace_once(source, old, new):
 def patch_reinstall(source):
     source = replace_once(
         source,
+        "show_dd_tips() {\n"
+        "    warn false '********** 提醒 Info **********'\n"
+        "    warn false '用户名/密码/公钥仅用于安装时登录 SSH 查看日志/救砖，不会应用到新系统。'\n"
+        "    warn false '镜像的用户名/密码/公钥不会被修改。'\n"
+        "    warn false\n"
+        "    warn false 'The Username/Password/Public Key is only for SSH login to view logs or rescue the system during installation, it will not be applied to the new system.'\n"
+        "    warn false 'The Username/Password/Public Key inside the image will NOT be modified.'\n"
+        "    warn false '**********************************'\n"
+        "}",
+        "show_dd_tips() {\n"
+        "    warn false '********** 爱快重装说明 **********'\n"
+        "    warn false '救援 SSH：root，端口 22；密码是刚设置或自动生成的 10 位密码。'\n"
+        '    warn false "安装进度网页：$(get_http_log_url)；仅在救援环境运行时可访问。"\n'
+        '    warn false "完成后访问：https://${IKUAI_PUBLIC_IP:-公网IP}/；账号 admin，密码与救援 SSH 相同。"\n'
+        "    warn false '新系统 SSH 默认关闭；需要时可在爱快管理界面开启。'\n"
+        "    warn false '**********************************'\n"
+        "}",
+    )
+    source = replace_once(
+        source,
+        "    warn false '重启后会自动开始重装。'\n"
+        "    warn false '这将清除主硬盘的所有数据，包括所有分区！！！'\n"
+        '    warn false "如果要取消重装，请在重启前运行 \\\"$reinstall_____ reset\\\"。"\n'
+        "    warn false\n"
+        "    warn false 'Reboot will start the automatic reinstallation.'\n"
+        "    warn false 'THIS WILL ERASE ALL DATA ON THE MAIN DISK, INCLUDING ALL PARTITIONS!!!'\n"
+        '    warn false "If you want to cancel the reinstallation, run \\\"$reinstall_____ reset\\\" before reboot."',
+        '    if [ -n "$IKUAI_PROFILE" ]; then\n'
+        "        warn false '已确认清空目标系统盘；程序即将自动重启进入救援环境，校验镜像后写盘。'\n"
+        "        warn false '写盘会删除目标盘的全部分区和数据；此阶段不再提供取消命令。'\n"
+        "        warn false '下载、校验或配置失败时停留在救援环境，不会自动启动不完整的系统。'\n"
+        "    else\n"
+        "        warn false '重启后会自动开始重装。'\n"
+        "        warn false '这将清除主硬盘的所有数据，包括所有分区！！！'\n"
+        '        warn false "如果要取消重装，请在重启前运行 \\\"$reinstall_____ reset\\\"。"\n'
+        "        warn false\n"
+        "        warn false 'Reboot will start the automatic reinstallation.'\n"
+        "        warn false 'THIS WILL ERASE ALL DATA ON THE MAIN DISK, INCLUDING ALL PARTITIONS!!!'\n"
+        '        warn false "If you want to cancel the reinstallation, run \\\"$reinstall_____ reset\\\" before reboot."\n'
+        "    fi",
+    )
+    source = replace_once(
+        source,
+        '    echo "http://IP$([ "${web_port:-80}" = 80 ] || echo :$web_port)$web_path"',
+        '    echo "http://${IKUAI_PUBLIC_IP:-IP}$([ "${web_port:-80}" = 80 ] || echo :$web_port)$web_path"',
+    )
+    source = replace_once(
+        source,
         "confhome=https://raw.githubusercontent.com/bin456789/reinstall/main",
         'confhome="file://$IKUAI_VENDOR_DIR"',
     )
@@ -66,6 +114,7 @@ def patch_reinstall(source):
         "    cp \"$IKUAI_PROFILE\" $initrd_dir/configs/ikuai-profile.json\n"
         "    cp \"$IKUAI_APPLY\" $initrd_dir/configs/apply_profile.py\n"
         "    cp \"$IKUAI_LIB\" $initrd_dir/configs/ikuai.py\n"
+        "    cp \"$IKUAI_LOGVIEWER\" $initrd_dir/configs/rescue_logviewer.html\n"
         "    printf '%s\\n' \"$IKUAI_DISK_BASENAME\" >$initrd_dir/configs/ikuai-disk\n"
         "    printf '%s\\n' \"$IKUAI_BOOT_MODE\" >$initrd_dir/configs/ikuai-boot-mode\n"
         "    printf '%s  %s\\n' \"$IKUAI_COMPRESSED_SHA256\" /tmp/ikuai.raw.gz "
@@ -111,10 +160,12 @@ def patch_trans(source):
     )
     source = replace_once(
         source,
-        "setup_web_if_enough_ram() {\n    total_ram=$(get_approximate_ram_size)",
-        "setup_web_if_enough_ram() {\n"
-        "    if [ -f /configs/ikuai-profile.json ]; then return; fi\n"
-        "    total_ram=$(get_approximate_ram_size)",
+        "    wget $confhome/logviewer.html -O /tmp/web$web_path\n",
+        "    if [ -f /configs/ikuai-profile.json ]; then\n"
+        '        cp /configs/rescue_logviewer.html "/tmp/web$web_path"\n'
+        "    else\n"
+        "        wget $confhome/logviewer.html -O /tmp/web$web_path\n"
+        "    fi\n",
     )
     first = source.index("dd_raw_with_extract() {")
     last = source.index("\nget_disk_sector_count() {", first)
