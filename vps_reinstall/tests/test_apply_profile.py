@@ -1,19 +1,36 @@
 import hashlib
 import json
+import stat
 import shutil
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from apply_profile import apply_profile, check_layout, disk_size, ensure_partition_device, provision_identity
+from apply_profile import (apply_profile, check_layout, disk_size, ensure_partition_device,
+                           expand_partitions,
+                           provision_identity, stable_partition_device)
 
 
 class ApplyProfileTests(unittest.TestCase):
+    def test_growth_uses_stable_device_for_both_filesystem_tools(self):
+        commands = []
+        with patch("apply_profile.check_layout", return_value="deadbeef"), \
+             patch("apply_profile.os.stat", return_value=SimpleNamespace(st_mode=stat.S_IFBLK)), \
+             patch("apply_profile.stable_partition_device",
+                   return_value=nullcontext("/tmp/ikuai-stable/vda6")), \
+             patch("apply_profile.run", side_effect=lambda *args, **_kwargs: commands.append(args)):
+            expand_partitions("/dev/vda", 20_000_000)
+        self.assertIn(("e2fsck", "-fy", "/tmp/ikuai-stable/vda6"), commands)
+        self.assertIn(("resize2fs", "/tmp/ikuai-stable/vda6"), commands)
+        self.assertNotIn(("resize2fs", "/dev/vda6"), commands)
+
     def test_rescue_populates_partition_device_after_table_reread(self):
         with patch("apply_profile.Path.is_block_device", side_effect=[False, True]), \
              patch("apply_profile.run") as run:

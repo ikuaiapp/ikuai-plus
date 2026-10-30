@@ -13,8 +13,8 @@ if [[ ! -r /dev/tty ]]; then
   exit 1
 fi
 
-release='https://github.com/ikuaiapp/ikuai-plus/releases/download/vps-reinstall-3.7.16-tencent-debian12-20261030'
-source_sha='dc30061654343a4fd1f06552ddcd189ee6df425c5c7a67a14f7b115213838454'
+release='https://github.com/ikuaiapp/ikuai-plus/releases/download/vps-reinstall-3.7.16-tencent-debian12-20261031'
+source_sha='12258828d3b605509101d409260fefab5ddf910213e772bff8693d8703a8d1fd'
 manifest_sha='c5a8168c3297517d4ed69c04c7c68179a37bf99f6952814fd2ffcc6fcc993d2f'
 public_ip=$(curl --noproxy '*' -fsS --max-time 5 http://169.254.0.23/latest/meta-data/public-ipv4)
 tmp=$(mktemp -d)

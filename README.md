@@ -24,4 +24,4 @@ iKuai 路由功能增强方案：专注于 Docker 环境下的**一机一号**�
 
 ### VPS 重装预览版
 
-[爱快 3.7.16 无 VNC 重装脚本与安全说明](vps_reinstall/README.md)支持单盘 x86-64 Linux VPS，腾讯云 DHCP/NAT 模式会核对实例元数据。镜像与一键脚本见 [Debian 12 腾讯云预览版 Release](https://github.com/ikuaiapp/ikuai-plus/releases/tag/vps-reinstall-3.7.16-tencent-debian12-20261030)。执行会清空系统盘；请先阅读限制条件并保留云厂商救援入口。`vps_reinstall/vendor/` 中上游救援脚本遵循其自身的 GPL-3.0 许可。
+[爱快 3.7.16 无 VNC 重装脚本与安全说明](vps_reinstall/README.md)支持单盘 x86-64 Linux VPS，腾讯云 DHCP/NAT 模式会核对实例元数据。镜像与一键脚本见 [Debian 12 腾讯云设备节点修复预览版 Release](https://github.com/ikuaiapp/ikuai-plus/releases/tag/vps-reinstall-3.7.16-tencent-debian12-20261031)。执行会清空系统盘；请先阅读限制条件并保留云厂商救援入口。`vps_reinstall/vendor/` 中上游救援脚本遵循其自身的 GPL-3.0 许可。

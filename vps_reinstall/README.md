@@ -25,7 +25,7 @@
 在已备份并确认可以清空系统盘的测试实例上，以 root 在交互终端执行：
 
 ```sh
-curl -fsSL https://github.com/ikuaiapp/ikuai-plus/releases/download/vps-reinstall-3.7.16-tencent-debian12-20261030/quick.sh | bash
+curl -fsSL https://github.com/ikuaiapp/ikuai-plus/releases/download/vps-reinstall-3.7.16-tencent-debian12-20261031/quick.sh | bash
 ```
 
 脚本会从腾讯云元数据取得公网 IP、校验下载的源码包及镜像清单，再显示即将清空的磁盘。密码可以输入并确认两次；任一步骤 30 秒未输入则自动生成一组 10 位密码并打印在终端。救援 SSH 和爱快 Web 管理员使用同一组密码。输入 `ERASE /dev/设备名` 后才开始准备救援启动；后续会清空所选磁盘。请事先确认 TCP 443 已在腾讯云安全组开放。
@@ -50,7 +50,7 @@ python3 vps_reinstall/install.py \
 - BIOS QEMU 使用 17 号市场包制作的镜像升级到原版 3.7.26 BIN 前后，本地市场界面及 API 均有响应；WAN MAC、静态地址、网关、WAN Web 443 设置及 SQLite 完整性检查均保持正常。
 - BIOS 和 UEFI 均已在本地 QEMU 中完成无需人工干预的全流程：从 Debian 源系统准备 Alpine 救援、自动重启、下载并校验镜像、写入 8 GiB 磁盘、核对原始摘要、配置 WAN/Web，到自动重启进入爱快。两种模式的 Web 登录、本地市场页面/API 均通过；SSH 默认关闭。UEFI 模式额外核验了 MBR/FAT 启动文件并创建 NVRAM 启动项。QEMU TCG 曾在下载阶段出现软锁死提示，随后自行恢复；这不等同于真实 VPS 稳定性验证。
 - 单独测试的 16 号市场包镜像升级到 3.7.26 后丢失了插件市场，不能用它替代 17 号市场包镜像。现有测试也不能保证以后所有版本都保留市场或网络配置。
-- 腾讯云 BIOS CVM 的私网 DHCP、镜像下载与校验、磁盘写入、WAN Web 登录、本地插件市场页面/API 已在真实实例验证。扩容阶段曾因 Alpine 缺少 `/dev/vda6` 节点停止；在救援环境运行 `mdev -s` 后完成扩容和启动。本版已加入自动节点同步及回归测试，尚未对修复后的完整无人值守流程进行第二次实机验证。
+- 腾讯云 BIOS CVM 的私网 DHCP、镜像下载与校验、磁盘写入、WAN Web 登录、本地插件市场页面/API 已在真实实例验证。Debian 12 实机复测时，救援环境仍在扩容阶段丢失 `/dev/vda6` 节点；已在救援环境用按内核设备号创建的稳定节点完成扩容，随后 Web 登录与市场 API 均正常。新包已把稳定节点修复纳入代码与测试，但尚未从干净 Debian 12 再次完成全自动实机重装。
 - UEFI 云主机、其他云厂商和失败后的自动恢复仍未经真实 VPS 验证。
 
 救援启动代码引用 `bin456789/reinstall` 的提交 `54fae2067557b3c0ca49e7c9ce03bca63c793f8c`（GPL-3.0），并在准备救援环境前校验随包源码的哈希。安装脚本与路由器镜像分开交付。公开 GitHub Release 可匿名下载镜像；镜像和脚本均不应包含 GitHub 登录信息。救援内核和 initramfs 在准备阶段会按固定的 SHA-256 校验，但救援阶段仍依赖上游 Alpine 仓库提供的模块与软件包，尚未做到完全离线或全部依赖锁定。

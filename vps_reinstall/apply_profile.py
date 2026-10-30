@@ -15,6 +15,7 @@ import sqlite3
 import stat
 import subprocess
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
 from ikuai import NetworkProfile, provision_database
@@ -116,6 +117,24 @@ def ensure_partition_device(partition):
         raise RuntimeError(f"partition device was not created: {partition}")
 
 
+@contextmanager
+def stable_partition_device(partition):
+    name = Path(partition).name
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", name) or partition != f"/dev/{name}":
+        raise ValueError("unexpected partition device path")
+    major_minor = (Path("/sys/class/block") / name / "dev").read_text().strip().split(":")
+    if len(major_minor) != 2 or not all(value.isdecimal() for value in major_minor):
+        raise RuntimeError("kernel did not expose the expected partition device")
+    device_number = os.makedev(int(major_minor[0]), int(major_minor[1]))
+    with tempfile.TemporaryDirectory(prefix="ikuai-stable-device-") as directory:
+        node = str(Path(directory) / name)
+        os.mknod(node, stat.S_IFBLK | 0o600, device_number)
+        actual = os.stat(node)
+        if not stat.S_ISBLK(actual.st_mode) or actual.st_rdev != device_number:
+            raise RuntimeError("temporary partition device does not match the kernel")
+        yield node
+
+
 def expand_partitions(disk, total_sectors):
     if total_sectors < 16_777_216 or total_sectors > 2**32:
         raise ValueError("disk must be between 8 GiB and 2 TiB")
@@ -131,9 +150,9 @@ def expand_partitions(disk, total_sectors):
     if stat.S_ISBLK(os.stat(disk).st_mode):
         run("blockdev", "--rereadpt", disk)
         part6 = disk_partition(disk, 6)
-        ensure_partition_device(part6)
-        run("e2fsck", "-fy", part6)
-        run("resize2fs", part6)
+        with stable_partition_device(part6) as stable_part6:
+            run("e2fsck", "-fy", stable_part6)
+            run("resize2fs", stable_part6)
     else:
         with tempfile.TemporaryDirectory(prefix="ikuai-data-") as directory:
             part6 = Path(directory) / "data.ext4"
