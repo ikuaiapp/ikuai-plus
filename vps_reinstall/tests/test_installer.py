@@ -7,8 +7,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from install import (confirmed_ifupdown_dhcp, execute, image_from_manifest,
-                     preflight, require_web_password, select_disk, verify_tencent_nat)
+from install import (confirmed_ifupdown_dhcp, execute, has_rescue_memory,
+                     image_from_manifest, preflight, require_web_password,
+                     select_disk, verify_oracle_nat, verify_tencent_nat)
 from stage_rescue import patch_reinstall, patch_trans, stage
 
 
@@ -22,6 +23,41 @@ def block_fixture():
 
 
 class InstallerTests(unittest.TestCase):
+    def test_nominal_one_gib_vps_memory_passes_rescue_floor(self):
+        self.assertTrue(has_rescue_memory(991288 * 1024))
+        self.assertFalse(has_rescue_memory(800 * 1024**2))
+
+    def test_oracle_nat_requires_exact_vnic_and_egress_match(self):
+        network = {"mac": "02:00:17:00:b1:5a", "mode": "dhcp",
+                   "address": "10.0.0.148", "prefix": 24, "gateway": "10.0.0.1"}
+        vnic = {"macAddr": "02:00:17:00:B1:5A", "privateIp": "10.0.0.148",
+                "subnetCidrBlock": "10.0.0.0/24", "virtualRouterIp": "10.0.0.1"}
+        with patch("install.oracle_metadata_vnics", return_value=[vnic]), \
+             patch("install.external_ipv4", return_value="132.145.90.54"):
+            self.assertEqual(verify_oracle_nat(network, "132.145.90.54"), "132.145.90.54")
+            with self.assertRaisesRegex(ValueError, "egress"):
+                verify_oracle_nat(network, "132.145.90.55")
+            with self.assertRaisesRegex(ValueError, "DHCP"):
+                verify_oracle_nat({**network, "mode": "static"}, "132.145.90.54")
+            with patch("install.oracle_metadata_vnics", return_value=[{**vnic, "macAddr": "02:00:17:00:b1:5b"}]):
+                with self.assertRaisesRegex(ValueError, "VNIC"):
+                    verify_oracle_nat(network, "132.145.90.54")
+
+    def test_oracle_dhcp_from_main_interfaces_file(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            main = root / "interfaces"
+            extra = root / "50-cloud-init"
+            main.write_text("auto ens3\niface ens3 inet dhcp\n")
+            extra.write_text("# empty\n")
+            (root / "dhclient.ens3.pid").write_text("513\n")
+            proc = root / "proc"
+            (proc / "513").mkdir(parents=True)
+            (proc / "513" / "cmdline").write_bytes(b"/sbin/dhclient\0-4\0ens3\0")
+            self.assertTrue(confirmed_ifupdown_dhcp("ens3", (main, extra), root, proc))
+            extra.write_text("iface ens3 inet static\n")
+            self.assertFalse(confirmed_ifupdown_dhcp("ens3", (main, extra), root, proc))
+
     def test_rescue_messages_describe_ikuai_password_and_erase_stage(self):
         source = (Path(__file__).resolve().parents[1] / "vendor/reinstall.sh").read_text()
         patched = patch_reinstall(source)

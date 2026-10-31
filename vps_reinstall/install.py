@@ -73,8 +73,50 @@ def tencent_metadata(key):
 
 
 def external_ipv4():
-    with urllib.request.urlopen("https://api.ipify.org?format=json", timeout=10) as response:
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open("https://api.ipify.org?format=json", timeout=10) as response:
         return str(ipaddress.IPv4Address(json.loads(response.read(256))["ip"]))
+
+
+def oracle_metadata_vnics():
+    url = "http://169.254.169.254/opc/v2/vnics/"
+    request = urllib.request.Request(url, headers={"Authorization": "Bearer Oracle"})
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(request, timeout=3) as response:
+        if response.geturl() != url:
+            raise ValueError("Oracle VNIC metadata redirected")
+        payload = response.read(65537)
+    if len(payload) > 65536:
+        raise ValueError("Oracle VNIC metadata is too large")
+    vnics = json.loads(payload)
+    if not isinstance(vnics, list):
+        raise ValueError("Oracle VNIC metadata is not a list")
+    return vnics
+
+
+def verify_oracle_nat(network, expected_public_ip):
+    expected = ipaddress.IPv4Address(expected_public_ip)
+    if not expected.is_global or network["mode"] != "dhcp":
+        raise ValueError("Oracle NAT requires a public IP and DHCP WAN")
+    if external_ipv4() != str(expected):
+        raise ValueError("Oracle public egress does not match the expected public IP")
+    vnics = oracle_metadata_vnics()
+    if len(vnics) != 1 or not isinstance(vnics[0], dict):
+        raise ValueError("Oracle VNIC metadata must identify one primary interface")
+    vnic = vnics[0]
+    expected_subnet = str(ipaddress.IPv4Network(
+        f"{network['address']}/{network['prefix']}", strict=False))
+    if (str(vnic.get("macAddr", "")).lower() != network["mac"] or
+            vnic.get("privateIp") != network["address"] or
+            vnic.get("subnetCidrBlock") != expected_subnet or
+            vnic.get("virtualRouterIp") != network["gateway"]):
+        raise ValueError("Oracle VNIC metadata does not match the default route NIC")
+    return str(expected)
+
+
+def has_rescue_memory(total_bytes):
+    # A nominal 1 GB VPS often exposes about 968 MiB after firmware reservation.
+    return total_bytes >= 896 * 1024**2
 
 
 def verify_tencent_nat(network, expected_public_ip):
@@ -92,13 +134,21 @@ def verify_tencent_nat(network, expected_public_ip):
     return public
 
 
-def confirmed_ifupdown_dhcp(dev, config=Path("/etc/network/interfaces.d/50-cloud-init"),
+def confirmed_ifupdown_dhcp(dev, config=None,
                             run_dir=Path("/run"), proc_dir=Path("/proc")):
     if not isinstance(dev, str) or not re.fullmatch(r"[a-zA-Z0-9_.-]{1,15}", dev):
         return False
     try:
-        matches = [line.split() for line in config.read_text().splitlines()
-                   if line.split()[:2] == ["iface", dev]]
+        if config is None:
+            configs = [Path("/etc/network/interfaces")]
+            configs.extend(sorted(Path("/etc/network/interfaces.d").glob("*")))
+        elif isinstance(config, (str, Path)):
+            configs = [Path(config)]
+        else:
+            configs = [Path(item) for item in config]
+        matches = [parts for path in configs if path.is_file()
+                   for line in path.read_text().splitlines()
+                   if (parts := line.split())[:2] == ["iface", dev]]
         if matches != [["iface", dev, "inet", "dhcp"]]:
             return False
         pid = int((run_dir / f"dhclient.{dev}.pid").read_text().strip())
@@ -111,11 +161,14 @@ def confirmed_ifupdown_dhcp(dev, config=Path("/etc/network/interfaces.d/50-cloud
         return False
 
 
-def preflight(*, allow_test_ip=False, tencent_nat_public_ip=None):
+def preflight(*, allow_test_ip=False, tencent_nat_public_ip=None,
+              oracle_nat_public_ip=None):
     if os.uname().machine != "x86_64" or sys.platform != "linux":
         raise ValueError("only x86-64 Linux sources are supported")
-    if os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") < 1024**3:
-        raise ValueError("rescue stage requires at least 1 GiB of RAM")
+    if not has_rescue_memory(os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")):
+        raise ValueError("rescue stage requires at least 896 MiB of usable physical RAM")
+    if tencent_nat_public_ip and oracle_nat_public_ip:
+        raise ValueError("select only one cloud NAT provider")
     if Path("/.dockerenv").exists() or Path("/run/.containerenv").exists():
         raise ValueError("run on the VPS host, not inside a container")
     mode = "uefi" if Path("/sys/firmware/efi").exists() else "bios"
@@ -123,12 +176,14 @@ def preflight(*, allow_test_ip=False, tencent_nat_public_ip=None):
     routes = command_json("ip", "-j", "-4", "route", "show", "default")
     route_dev = next((route.get("dev") for route in routes if route.get("dst") == "default"), None)
     network = select_network(addresses, routes, allow_test_ip=allow_test_ip,
-                             allow_cloud_nat_dhcp=bool(tencent_nat_public_ip),
-                             dhcp_source_confirmed=(bool(tencent_nat_public_ip) and
+                             allow_cloud_nat_dhcp=bool(tencent_nat_public_ip or oracle_nat_public_ip),
+                             dhcp_source_confirmed=(bool(tencent_nat_public_ip or oracle_nat_public_ip) and
                                                     confirmed_ifupdown_dhcp(route_dev)))
     public_ip = None
     if tencent_nat_public_ip:
         public_ip = verify_tencent_nat(vars(network), tencent_nat_public_ip)
+    elif oracle_nat_public_ip:
+        public_ip = verify_oracle_nat(vars(network), oracle_nat_public_ip)
     elif not allow_test_ip:
         public_ip = external_ipv4()
         if public_ip != network.address:
@@ -143,7 +198,8 @@ def preflight(*, allow_test_ip=False, tencent_nat_public_ip=None):
         raise ValueError("selected system disk is not a block device")
     return {"boot_mode": mode, "disk": disk, "disk_bytes": size,
             "nic": dev, "network": vars(network), "public_ip": public_ip,
-            "provider": "tencent-nat" if tencent_nat_public_ip else "direct"}
+            "provider": ("tencent-nat" if tencent_nat_public_ip else
+                         "oracle-nat" if oracle_nat_public_ip else "direct")}
 
 
 def load_manifest(url, expected_sha256):
@@ -258,8 +314,11 @@ def main():
                         help="confirm and stage an irreversible system-disk rewrite")
     parser.add_argument("--tencent-nat-public-ip",
                         help="opt in to Tencent Cloud DHCP/NAT after metadata and public IP checks")
+    parser.add_argument("--oracle-nat-public-ip",
+                        help="opt in to Oracle Cloud DHCP/NAT after VNIC metadata and public egress checks")
     args = parser.parse_args()
-    preview = preflight(tencent_nat_public_ip=args.tencent_nat_public_ip)
+    preview = preflight(tencent_nat_public_ip=args.tencent_nat_public_ip,
+                        oracle_nat_public_ip=args.oracle_nat_public_ip)
     manifest = load_manifest(args.manifest_url, args.manifest_sha256)
     image_url, image = image_from_manifest(args.manifest_url, manifest, preview["boot_mode"])
     print(json.dumps({"preflight": preview, "image": image_url,

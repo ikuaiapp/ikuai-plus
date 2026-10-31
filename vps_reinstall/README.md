@@ -1,7 +1,7 @@
 # 爱快 3.7.16 VPS 重装候选方案
 
 这是面向 x86-64 Linux VPS 的整盘重装工具，会清除目标磁盘上的全部数据。
-目前它仍是**预览方案**：BIOS 和 UEFI 已在本地 QEMU 中完成救援写盘、自动重启和 Web/市场验证。腾讯云 BIOS CVM 已完成实机安装和 Web/市场验证。升级到原厂 3.7.26 后，市场在首次检查时可用，但再次重启会消失；跨版本保留尚未通过验证。先使用有厂商救援入口的测试 VPS；不要直接在生产服务器上运行 `--execute`。
+目前它仍是**预览方案**：BIOS 和 UEFI 已在本地 QEMU 中完成救援写盘、自动重启和 Web/市场验证。腾讯云、RackNerd 和 Oracle Cloud VPS 均已完成实机安装；Oracle 测试机为约 1 GB 内存、UEFI、私网 DHCP 和公网 NAT。升级到原厂 3.7.26 后，市场在首次检查时可用，但再次重启会消失；跨版本保留尚未通过验证。先使用有厂商救援入口的测试 VPS；不要直接在生产服务器上运行 `--execute`。
 
 ## 交付文件
 
@@ -16,8 +16,10 @@
 - 单块普通的 x86-64 Linux 系统盘，使用 BIOS 或 UEFI 启动，逻辑扇区为 512 字节，容量为 8 GiB 至 2 TiB。不支持 LVM、RAID、Windows，也不允许在容器内运行。
 - 一条经由物理或半虚拟化网卡的 IPv4 默认路由。常规模式支持 DHCP，或直接配置在网卡上、网关位于同一子网的公网静态地址。
 - 腾讯云 CVM 使用私网 DHCP 加公网 NAT 时，显式传入 `--tencent-nat-public-ip 公网IP`；安装器会核对腾讯云实例元数据中的公网 IP、私网 IP、网卡 MAC 及公网出口 IP，仅将私网 DHCP 写入 WAN1。该参数不适用于其他云厂商或静态私网地址。
+- Oracle Cloud 单网卡实例使用私网 DHCP 加公网 NAT 时，传入 `--oracle-nat-public-ip 公网IP`；安装器核对 IMDSv2 VNIC 元数据中的 MAC、私网 IP、子网、网关以及公网出口 IP。多 VNIC 或元数据不一致会被拒绝。
 - Debian 12 的部分 cloud-init 配置会运行 dhclient，但 `ip route` 不显示 `proto dhcp`。此时仅在核对 `iface eth0 inet dhcp`、活跃 dhclient 进程和腾讯云元数据均一致后，接受该网卡为 DHCP。
 - 在准备救援环境之前，拒绝 `/32`、跨网段网关、未验证的 1:1 NAT、多条默认路由及无法明确识别网卡的情况。
+- 救援环境至少需要 896 MiB 可用物理内存。标称 1 GB 的测试 VPS 实际显示约 968 MiB，已完成实机安装；更小的实例不在支持范围内。
 - 云厂商安全组必须允许访问新系统 WAN Web 界面的 TCP 443 端口。应保留厂商救援控制台，以便回退。
 
 ## Debian 12 快速入口
@@ -25,21 +27,21 @@
 在已备份并确认可以清空系统盘的测试实例上，以 root 在交互终端执行：
 
 ```sh
-curl -fsSL https://github.com/ikuaiapp/ikuai-plus/releases/download/vps-reinstall-3.7.16-multivps-20261031/quick.sh | bash
+curl -fsSL https://github.com/ikuaiapp/ikuai-plus/releases/download/vps-reinstall-3.7.16-oracle-20261031/quick.sh | bash
 ```
 
-脚本会校验下载的源码包及镜像清单，再显示即将清空的磁盘。腾讯云私网 DHCP/公网 NAT 实例会读取并核对腾讯云元数据；其他实例走通用直连预检，要求地址与同网段网关可可靠识别。密码可以输入并确认两次；任一步骤 30 秒未输入则自动生成一组 10 位密码并打印在终端。救援 SSH（root，端口 22）和爱快 Web 管理员使用同一组密码；目标爱快的 SSH 默认关闭。输入 `ERASE /dev/设备名` 后才开始准备救援启动；随后自动重启，校验镜像后清空所选磁盘。救援期间的进度网页使用检测到的真实公网 IP。请事先确认 TCP 443 已在云厂商防火墙和系统防火墙放行。
+脚本会校验下载的源码包及镜像清单，再显示即将清空的磁盘。腾讯云和 Oracle Cloud 的单网卡私网 DHCP/公网 NAT 实例分别读取并核对各自的元数据；其他实例走通用直连预检，要求地址与同网段网关可可靠识别。密码可以输入并确认两次；任一步骤 30 秒未输入则自动生成一组 10 位密码并打印在终端。救援 SSH（root，端口 22）和爱快 Web 管理员使用同一组密码；目标爱快的 SSH 默认关闭。输入 `ERASE /dev/设备名` 后才开始准备救援启动；随后自动重启，校验镜像后清空所选磁盘。救援期间的进度网页使用检测到的真实公网 IP。请事先确认 TCP 22、443 已在云厂商安全组放行。
 
 从 GitHub Release 下载源码包并核对其 SHA-256 后，先运行以下命令进行预检：
 
 ```sh
 python3 vps_reinstall/install.py \
-  --manifest-url https://github.com/ikuaiapp/ikuai-plus/releases/download/vps-reinstall-3.7.16-multivps-20261031/ikuai-cloud-v1-manifest.json \
+  --manifest-url https://github.com/ikuaiapp/ikuai-plus/releases/download/vps-reinstall-3.7.16-oracle-20261031/ikuai-cloud-v1-manifest.json \
   --manifest-sha256 c5a8168c3297517d4ed69c04c7c68179a37bf99f6952814fd2ffcc6fcc993d2f
 # 先核对预检结果和所选磁盘；确认无误后才添加 --execute。
 ```
 
-腾讯云 CVM 的预检在上述命令末尾追加 `--tencent-nat-public-ip 公网IP`；确认预检与安全组、厂商快照和救援入口后，再追加 `--execute`。已验证的测试实例为 BIOS、单块 60 GiB VirtIO 磁盘、私网 DHCP 及公网 NAT；不能由这一次验证推断所有腾讯云机型都适用。
+腾讯云 CVM 的预检在上述命令末尾追加 `--tencent-nat-public-ip 公网IP`；Oracle Cloud 单网卡实例追加 `--oracle-nat-public-ip 公网IP`。确认预检与安全组、厂商快照和救援入口后，再追加 `--execute`。已验证的腾讯云实例为 BIOS、单块 60 GiB VirtIO 磁盘、私网 DHCP 及公网 NAT；Oracle Cloud 实例为 UEFI、单块 50 GiB 磁盘、约 1 GB 内存、私网 DHCP 及公网 NAT。不能由这些验证推断所有云机型都适用。
 
 清单文件的 SHA-256 摘要需通过独立渠道提供。添加 `--execute` 后，程序会要求输入两次相同的 10 位可见 ASCII 密码（含字母和数字）；任一步骤 30 秒没有输入则自动生成并在终端显示一组 10 位密码。该密码同时用于救援 SSH 和目标爱快 Web 管理员，请及时记录。随后必须输入 `ERASE /dev/DEVICE` 确认清空目标磁盘。此时源系统的启动项会先被改为一次性救援系统，随后自动重启；即使尚未清盘，也不能将这一步视为无修改操作。下载的镜像会依次核对清单中的 SHA-256、检查 gzip 数据流，并在写盘后再次核对原始磁盘内容，然后才配置 WAN 和 Web。若中途失败，程序会保留救援访问入口，而不会自动启动配置不完整的系统。
 
@@ -52,6 +54,6 @@ python3 vps_reinstall/install.py \
 - 单独测试的 16 号市场包镜像升级到 3.7.26 后丢失了插件市场，不能用它替代 17 号市场包镜像。现有测试也不能保证以后所有版本都保留市场或网络配置。
 - 腾讯云 BIOS CVM 的私网 DHCP、镜像下载与校验、磁盘写入、WAN Web 登录、本地插件市场页面/API 已在真实实例验证。救援进度页已通过公网 HTTP 和 WebSocket 连接验证。升级到原版 3.7.26 后，市场首次检查正常，第二次重启后消失；持久分区中的市场包与登记记录仍在。当前发布版不能承诺升级后持续保留市场。
 - RackNerd/KVM BIOS VPS（Debian 12、45 GiB VirtIO 磁盘、`64.188.29.150/24` 静态公网地址、同网段网关）已验证预检、救援进度页和 SSH、镜像下载及校验、写盘、最终爱快 Web 登录和本地市场页面/API。该实例说明通用直连路径可以工作，不能由此推断其他厂商的特殊网络配置也适用。
-- UEFI 云主机、其他云厂商和失败后的自动恢复仍未经真实 VPS 验证。
+- Oracle Cloud UEFI VPS（Debian 12、50 GiB 磁盘、约 968 MiB 可用物理内存、`ens3` 私网 DHCP 加公网 NAT）已验证预检、救援 SSH/进度页、下载和磁盘 SHA-256 校验、写盘、配置和最终 HTTPS 登录页。用户另行确认 WAN1 与本地插件市场可用。其他 Oracle 机型、其他云厂商和失败后的自动恢复仍未经真实 VPS 验证。
 
 救援启动代码引用 `bin456789/reinstall` 的提交 `54fae2067557b3c0ca49e7c9ce03bca63c793f8c`（GPL-3.0），并在准备救援环境前校验随包源码的哈希。安装脚本与路由器镜像分开交付。公开 GitHub Release 可匿名下载镜像；镜像和脚本均不应包含 GitHub 登录信息。救援内核和 initramfs 在准备阶段会按固定的 SHA-256 校验，但救援阶段仍依赖上游 Alpine 仓库提供的模块与软件包，尚未做到完全离线或全部依赖锁定。

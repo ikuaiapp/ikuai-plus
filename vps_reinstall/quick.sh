@@ -13,8 +13,8 @@ if [[ ! -r /dev/tty ]]; then
   exit 1
 fi
 
-release='https://github.com/ikuaiapp/ikuai-plus/releases/download/vps-reinstall-3.7.16-multivps-20261031'
-source_sha='e21161b829d565b6c2099951e30c993a2e5eca26cd50e8cb4fdd67e5c81e77c0'
+release='https://github.com/ikuaiapp/ikuai-plus/releases/download/vps-reinstall-3.7.16-oracle-20261031'
+source_sha='5d5d7657af32284973d08906c90b734343b5b17a17b633806e011096226027c4'
 manifest_sha='c5a8168c3297517d4ed69c04c7c68179a37bf99f6952814fd2ffcc6fcc993d2f'
 provider_args=()
 if public_ip=$(curl --noproxy '*' -fsS --max-time 3 \
@@ -22,6 +22,10 @@ if public_ip=$(curl --noproxy '*' -fsS --max-time 3 \
   # The installer independently checks Tencent metadata, WAN MAC, private IP,
   # and public egress before accepting this NAT mode.
   provider_args=(--tencent-nat-public-ip "$public_ip")
+elif curl --noproxy '*' -fsS --max-time 3 -H 'Authorization: Bearer Oracle' \
+    -o /dev/null http://169.254.169.254/opc/v2/vnics/ 2>/dev/null; then
+  public_ip=$(curl --noproxy '*' -fsS --max-time 10 https://api.ipify.org)
+  provider_args=(--oracle-nat-public-ip "$public_ip")
 fi
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
