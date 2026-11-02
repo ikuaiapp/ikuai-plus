@@ -13,8 +13,8 @@ if [[ ! -r /dev/tty ]]; then
   exit 1
 fi
 
-release='https://github.com/ikuaiapp/ikuai-plus/releases/download/vps-reinstall-3.7.16-oracle-20261031'
-source_sha='5d5d7657af32284973d08906c90b734343b5b17a17b633806e011096226027c4'
+release='https://github.com/ikuaiapp/ikuai-plus/releases/download/vps-reinstall-3.7.16-oracle-static-20261102'
+source_sha='5df7aa891848d8b20610ef590ddd82a6c8b112f4c34772bf9b10eb7b5ec3dfea'
 manifest_sha='c5a8168c3297517d4ed69c04c7c68179a37bf99f6952814fd2ffcc6fcc993d2f'
 provider_args=()
 if public_ip=$(curl --noproxy '*' -fsS --max-time 3 \

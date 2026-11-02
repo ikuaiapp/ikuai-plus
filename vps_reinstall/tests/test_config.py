@@ -62,6 +62,17 @@ class NetworkTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "DHCP"):
             select_network(self.addresses, self.routes, allow_cloud_nat_dhcp=True)
 
+    def test_oracle_static_private_requires_explicit_static_mode(self):
+        self.addresses[0]["addr_info"][0].update(local="10.0.0.241", prefixlen=24)
+        self.routes[0].update(gateway="10.0.0.1", protocol=None)
+        with self.assertRaises(ValueError):
+            select_network(self.addresses, self.routes)
+        got = select_network(self.addresses, self.routes, allow_cloud_nat_static=True)
+        self.assertEqual(got, NetworkProfile("52:54:00:12:34:56", "static", "10.0.0.241", 24, "10.0.0.1"))
+        self.addresses[0]["addr_info"][0]["dynamic"] = True
+        with self.assertRaisesRegex(ValueError, "static"):
+            select_network(self.addresses, self.routes, allow_cloud_nat_static=True)
+
     def test_cloud_nat_accepts_unlabelled_dhcp_route_with_verified_client(self):
         self.addresses[0]["addr_info"][0].update(local="10.3.0.2", prefixlen=22)
         self.routes[0].update(gateway="10.3.0.1", protocol=None)

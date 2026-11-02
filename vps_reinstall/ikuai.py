@@ -19,7 +19,7 @@ class NetworkProfile:
 
 
 def select_network(addresses, routes, *, allow_test_ip=False, allow_cloud_nat_dhcp=False,
-                   dhcp_source_confirmed=False):
+                   allow_cloud_nat_static=False, dhcp_source_confirmed=False):
     defaults = [route for route in routes if route.get("dst") == "default"]
     if len(defaults) != 1:
         raise ValueError("expected exactly one IPv4 default route")
@@ -36,10 +36,10 @@ def select_network(addresses, routes, *, allow_test_ip=False, allow_cloud_nat_dh
     if prefix < 1 or prefix >= 31:
         raise ValueError("unsupported IPv4 prefix; /31 and /32 require provider-specific routing")
     local = ipaddress.IPv4Address(address["local"])
-    if allow_cloud_nat_dhcp:
-        if (not local.is_private or route.get("protocol") not in (None, "dhcp") or
-                not (route.get("protocol") == "dhcp" or dhcp_source_confirmed)):
-            raise ValueError("cloud NAT requires a private IPv4 address and verified DHCP source")
+    cloud_nat = allow_cloud_nat_dhcp or allow_cloud_nat_static
+    if cloud_nat:
+        if not local.is_private:
+            raise ValueError("cloud NAT requires a private IPv4 address")
     elif not allow_test_ip and not local.is_global:
         raise ValueError("source IPv4 is not public; a 1:1 NAT/cloud route needs manual support")
     gateway = ipaddress.IPv4Address(route["gateway"])
@@ -54,9 +54,21 @@ def select_network(addresses, routes, *, allow_test_ip=False, allow_cloud_nat_dh
         raise ValueError("invalid unicast MAC")
     dynamic = bool(address.get("dynamic")) or "dynamic" in address.get("flags", [])
     dhcp_route = route.get("protocol") == "dhcp"
-    if dynamic != dhcp_route and not allow_cloud_nat_dhcp:
-        raise ValueError("DHCP/static source network state is ambiguous")
-    mode = "dhcp" if dhcp_route or (allow_cloud_nat_dhcp and dhcp_source_confirmed) else "static"
+    if cloud_nat:
+        if dhcp_route or dhcp_source_confirmed:
+            if not allow_cloud_nat_dhcp or route.get("protocol") not in (None, "dhcp"):
+                raise ValueError("cloud NAT requires a verified DHCP source")
+            mode = "dhcp"
+        else:
+            if not allow_cloud_nat_static:
+                raise ValueError("cloud NAT requires a verified DHCP source")
+            if dynamic or route.get("protocol") not in (None, "static"):
+                raise ValueError("cloud NAT static source network state is ambiguous")
+            mode = "static"
+    else:
+        if dynamic != dhcp_route:
+            raise ValueError("DHCP/static source network state is ambiguous")
+        mode = "dhcp" if dhcp_route else "static"
     return NetworkProfile(mac, mode, str(local), prefix, str(gateway))
 
 

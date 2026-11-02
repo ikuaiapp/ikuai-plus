@@ -94,10 +94,13 @@ def oracle_metadata_vnics():
     return vnics
 
 
-def verify_oracle_nat(network, expected_public_ip):
+def verify_oracle_nat(network, expected_public_ip, dev=None):
     expected = ipaddress.IPv4Address(expected_public_ip)
-    if not expected.is_global or network["mode"] != "dhcp":
-        raise ValueError("Oracle NAT requires a public IP and DHCP WAN")
+    if not expected.is_global or network["mode"] not in ("dhcp", "static"):
+        raise ValueError("Oracle NAT requires a public IP and known WAN mode")
+    if network["mode"] == "static" and not confirmed_ifupdown_static(
+            dev, network["address"], network["prefix"], network["gateway"]):
+        raise ValueError("Oracle static source config does not match the current WAN")
     if external_ipv4() != str(expected):
         raise ValueError("Oracle public egress does not match the expected public IP")
     vnics = oracle_metadata_vnics()
@@ -161,6 +164,51 @@ def confirmed_ifupdown_dhcp(dev, config=None,
         return False
 
 
+def confirmed_ifupdown_static(dev, address, prefix, gateway, config=None):
+    if not isinstance(dev, str) or not re.fullmatch(r"[a-zA-Z0-9_.-]{1,15}", dev):
+        return False
+    try:
+        if config is None:
+            configs = [Path("/etc/network/interfaces")]
+            configs.extend(sorted(Path("/etc/network/interfaces.d").glob("*")))
+        elif isinstance(config, (str, Path)):
+            configs = [Path(config)]
+        else:
+            configs = [Path(item) for item in config]
+        matching = []
+        for path in configs:
+            if not path.is_file():
+                continue
+            current = None
+            for raw in path.read_text().splitlines():
+                parts = raw.split("#", 1)[0].split()
+                if not parts:
+                    continue
+                if parts[0] == "iface":
+                    current = {} if parts == ["iface", dev, "inet", "static"] else None
+                    if len(parts) > 1 and parts[1] == dev:
+                        if current is None:
+                            return False
+                        matching.append(current)
+                elif parts[0] in ("auto", "allow-hotplug", "mapping", "source", "source-directory"):
+                    current = None
+                elif current is not None and parts[0] in ("address", "gateway", "netmask"):
+                    if len(parts) != 2 or parts[0] in current:
+                        return False
+                    current[parts[0]] = parts[1]
+        if len(matching) != 1:
+            return False
+        source = matching[0]
+        ip_cidr = source.get("address", "")
+        if "/" not in ip_cidr:
+            ip_cidr += "/" + source.get("netmask", "")
+        configured = ipaddress.IPv4Interface(ip_cidr)
+        return (str(configured.ip) == address and configured.network.prefixlen == prefix and
+                source.get("gateway") == gateway)
+    except (OSError, UnicodeError, ValueError, ipaddress.AddressValueError):
+        return False
+
+
 def preflight(*, allow_test_ip=False, tencent_nat_public_ip=None,
               oracle_nat_public_ip=None):
     if os.uname().machine != "x86_64" or sys.platform != "linux":
@@ -177,13 +225,14 @@ def preflight(*, allow_test_ip=False, tencent_nat_public_ip=None,
     route_dev = next((route.get("dev") for route in routes if route.get("dst") == "default"), None)
     network = select_network(addresses, routes, allow_test_ip=allow_test_ip,
                              allow_cloud_nat_dhcp=bool(tencent_nat_public_ip or oracle_nat_public_ip),
+                             allow_cloud_nat_static=bool(oracle_nat_public_ip),
                              dhcp_source_confirmed=(bool(tencent_nat_public_ip or oracle_nat_public_ip) and
                                                     confirmed_ifupdown_dhcp(route_dev)))
     public_ip = None
     if tencent_nat_public_ip:
         public_ip = verify_tencent_nat(vars(network), tencent_nat_public_ip)
     elif oracle_nat_public_ip:
-        public_ip = verify_oracle_nat(vars(network), oracle_nat_public_ip)
+        public_ip = verify_oracle_nat(vars(network), oracle_nat_public_ip, route_dev)
     elif not allow_test_ip:
         public_ip = external_ipv4()
         if public_ip != network.address:

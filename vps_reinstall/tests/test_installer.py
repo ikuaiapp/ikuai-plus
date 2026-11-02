@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from install import (confirmed_ifupdown_dhcp, execute, has_rescue_memory,
+from install import (confirmed_ifupdown_dhcp, confirmed_ifupdown_static, execute, has_rescue_memory,
                      image_from_manifest, preflight, require_web_password,
                      select_disk, verify_oracle_nat, verify_tencent_nat)
 from stage_rescue import patch_reinstall, patch_trans, stage
@@ -37,11 +37,36 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(verify_oracle_nat(network, "132.145.90.54"), "132.145.90.54")
             with self.assertRaisesRegex(ValueError, "egress"):
                 verify_oracle_nat(network, "132.145.90.55")
-            with self.assertRaisesRegex(ValueError, "DHCP"):
+            with self.assertRaisesRegex(ValueError, "static source"):
                 verify_oracle_nat({**network, "mode": "static"}, "132.145.90.54")
             with patch("install.oracle_metadata_vnics", return_value=[{**vnic, "macAddr": "02:00:17:00:b1:5b"}]):
                 with self.assertRaisesRegex(ValueError, "VNIC"):
                     verify_oracle_nat(network, "132.145.90.54")
+
+    def test_oracle_static_nat_requires_matching_source_config(self):
+        network = {"mac": "02:00:17:02:6c:ec", "mode": "static",
+                   "address": "10.0.0.241", "prefix": 24, "gateway": "10.0.0.1"}
+        vnic = {"macAddr": "02:00:17:02:6C:EC", "privateIp": "10.0.0.241",
+                "subnetCidrBlock": "10.0.0.0/24", "virtualRouterIp": "10.0.0.1"}
+        with patch("install.oracle_metadata_vnics", return_value=[vnic]), \
+             patch("install.external_ipv4", return_value="146.235.204.167"), \
+             patch("install.confirmed_ifupdown_static", return_value=True):
+            self.assertEqual(verify_oracle_nat(network, "146.235.204.167", "ens3"), "146.235.204.167")
+            with patch("install.confirmed_ifupdown_static", return_value=False):
+                with self.assertRaisesRegex(ValueError, "static source"):
+                    verify_oracle_nat(network, "146.235.204.167", "ens3")
+
+    def test_static_source_must_match_address_prefix_gateway_and_interface(self):
+        with tempfile.TemporaryDirectory() as temp:
+            config = Path(temp) / "interfaces"
+            config.write_text("auto lo\niface lo inet loopback\n"
+                              "allow-hotplug ens3\niface ens3 inet static\n"
+                              "  address 10.0.0.241/24\n  gateway 10.0.0.1\n")
+            self.assertTrue(confirmed_ifupdown_static("ens3", "10.0.0.241", 24, "10.0.0.1", config))
+            self.assertFalse(confirmed_ifupdown_static("ens4", "10.0.0.241", 24, "10.0.0.1", config))
+            self.assertFalse(confirmed_ifupdown_static("ens3", "10.0.0.242", 24, "10.0.0.1", config))
+            config.write_text(config.read_text() + "iface ens3 inet dhcp\n")
+            self.assertFalse(confirmed_ifupdown_static("ens3", "10.0.0.241", 24, "10.0.0.1", config))
 
     def test_oracle_dhcp_from_main_interfaces_file(self):
         with tempfile.TemporaryDirectory() as temp:
