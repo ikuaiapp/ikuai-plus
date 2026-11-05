@@ -24,4 +24,4 @@ iKuai 路由功能增强方案：专注于 Docker 环境下的**一机一号**�
 
 ### VPS 重装预览版
 
-[爱快 3.7.16 无 VNC 重装脚本与安全说明](vps_reinstall/README.md)支持单盘 x86-64 Linux VPS，已在腾讯云、RackNerd 和两种 Oracle Cloud 网络配置上测试，包括约 1 GB 内存的 UEFI 实例。镜像与一键脚本见 [多厂商预览版 Release](https://github.com/ikuaiapp/ikuai-plus/releases/tag/vps-reinstall-3.7.16-oracle-static-20261102)。执行会清空系统盘；请先阅读限制条件并保留云厂商救援入口。`vps_reinstall/vendor/` 中上游救援脚本遵循其自身的 GPL-3.0 许可。
+[爱快 3.7.16 无 VNC 重装脚本与安全说明](vps_reinstall/README.md)支持单盘 x86-64 Linux VPS，已在腾讯云、RackNerd、云耀和两种 Oracle Cloud 网络配置上测试，包括约 1 GB 内存的 UEFI 实例。镜像与一键脚本见 [多厂商预览版 Release](https://github.com/ikuaiapp/ikuai-plus/releases/tag/vps-reinstall-3.7.16-netboot-pin-20261105)。执行会清空系统盘；请先阅读限制条件并保留云厂商救援入口。`vps_reinstall/vendor/` 中上游救援脚本遵循其自身的 GPL-3.0 许可。

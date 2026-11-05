@@ -25,6 +25,19 @@ def replace_once(source, old, new):
 def patch_reinstall(source):
     source = replace_once(
         source,
+        '        set_osvar modloop "$mirror/releases/$basearch/netboot/modloop-$flavour"\n'
+        '        set_osvar repo "$mirror/main"\n',
+        '        set_osvar modloop "$mirror/releases/$basearch/netboot/modloop-$flavour"\n'
+        '        set_osvar repo "$mirror/main"\n'
+        '        if [ -n "${IKUAI_PROFILE:-}" ] && [ "$basearch" = x86_64 ] && [ "$flavour" = virt ]; then\n'
+        '            ikuai_netboot=https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/x86_64/netboot-3.24.3\n'
+        '            set_osvar vmlinuz "$ikuai_netboot/vmlinuz-virt"\n'
+        '            set_osvar initrd "$ikuai_netboot/initramfs-virt"\n'
+        '            set_osvar modloop "$ikuai_netboot/modloop-virt"\n'
+        '        fi\n',
+    )
+    source = replace_once(
+        source,
         "show_dd_tips() {\n"
         "    warn false '********** 提醒 Info **********'\n"
         "    warn false '用户名/密码/公钥仅用于安装时登录 SSH 查看日志/救砖，不会应用到新系统。'\n"

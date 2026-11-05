@@ -93,6 +93,14 @@ class InstallerTests(unittest.TestCase):
         self.assertIn('IKUAI_PUBLIC_IP:-IP', patched)
         self.assertNotIn("镜像的用户名/密码/公钥不会被修改。", patched)
 
+    def test_ikuai_rescue_pins_matching_alpine_boot_files(self):
+        source = (Path(__file__).resolve().parents[1] / "vendor/reinstall.sh").read_text()
+        patched = patch_reinstall(source)
+        self.assertIn("https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/x86_64/netboot-3.24.3", patched)
+        self.assertIn('set_osvar vmlinuz "$ikuai_netboot/vmlinuz-virt"', patched)
+        self.assertIn('set_osvar initrd "$ikuai_netboot/initramfs-virt"', patched)
+        self.assertIn('set_osvar modloop "$ikuai_netboot/modloop-virt"', patched)
+
     def test_dhcp_client_and_cloud_init_must_agree_on_interface(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

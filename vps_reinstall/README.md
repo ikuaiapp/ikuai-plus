@@ -1,7 +1,7 @@
 # 爱快 3.7.16 VPS 重装候选方案
 
 这是面向 x86-64 Linux VPS 的整盘重装工具，会清除目标磁盘上的全部数据。
-目前它仍是**预览方案**：BIOS 和 UEFI 已在本地 QEMU 中完成救援写盘、自动重启和 Web/市场验证。腾讯云、RackNerd 和 Oracle Cloud VPS 均已完成实机安装；两台约 1 GB 内存的 Oracle UEFI 测试机分别使用私网 DHCP 和私网静态地址。升级到原厂 3.7.26 后，市场在首次检查时可用，但再次重启会消失；跨版本保留尚未通过验证。先使用有厂商救援入口的测试 VPS；不要直接在生产服务器上运行 `--execute`。
+目前它仍是**预览方案**：BIOS 和 UEFI 已在本地 QEMU 中完成救援写盘、自动重启和 Web/市场验证。腾讯云、RackNerd、Oracle Cloud 和云耀 VPS 已完成实机安装；两台约 1 GB 内存的 Oracle UEFI 测试机分别使用私网 DHCP 和私网静态地址。升级到原厂 3.7.26 后，市场在首次检查时可用，但再次重启会消失；跨版本保留尚未通过验证。先使用有厂商救援入口的测试 VPS；不要直接在生产服务器上运行 `--execute`。
 
 ## 交付文件
 
@@ -27,7 +27,7 @@
 在已备份并确认可以清空系统盘的测试实例上，以 root 在交互终端执行：
 
 ```sh
-curl -fsSL https://github.com/ikuaiapp/ikuai-plus/releases/download/vps-reinstall-3.7.16-oracle-static-20261102/quick.sh | bash
+curl -fsSL https://github.com/ikuaiapp/ikuai-plus/releases/download/vps-reinstall-3.7.16-netboot-pin-20261105/quick.sh | bash
 ```
 
 脚本会校验下载的源码包及镜像清单，再显示即将清空的磁盘。腾讯云的私网 DHCP/NAT 和 Oracle Cloud 的单网卡私网 DHCP 或静态地址/NAT 实例分别读取并核对各自的元数据；其他实例走通用直连预检，要求地址与同网段网关可可靠识别。密码可以输入并确认两次；任一步骤 30 秒未输入则自动生成一组 10 位密码并打印在终端。救援 SSH（root，端口 22）和爱快 Web 管理员使用同一组密码；目标爱快的 SSH 默认关闭。输入 `ERASE /dev/设备名` 后才开始准备救援启动；随后自动重启，校验镜像后清空所选磁盘。救援期间的进度网页使用检测到的真实公网 IP。请事先确认 TCP 22、443 已在云厂商安全组放行。
@@ -56,5 +56,6 @@ python3 vps_reinstall/install.py \
 - RackNerd/KVM BIOS VPS（Debian 12、45 GiB VirtIO 磁盘、`64.188.29.150/24` 静态公网地址、同网段网关）已验证预检、救援进度页和 SSH、镜像下载及校验、写盘、最终爱快 Web 登录和本地市场页面/API。该实例说明通用直连路径可以工作，不能由此推断其他厂商的特殊网络配置也适用。
 - Oracle Cloud UEFI VPS（Debian 12、50 GiB 磁盘、约 968 MiB 可用物理内存、`ens3` 私网 DHCP 加公网 NAT）已验证预检、救援 SSH/进度页、下载和磁盘 SHA-256 校验、写盘、配置和最终 HTTPS 登录页。用户另行确认 WAN1 与本地插件市场可用。
 - 第二台 Oracle Cloud UEFI VPS（Debian 12、约 46.6 GiB 单盘、约 955 MiB 可用物理内存、`ens3` 私网静态地址 `10.0.0.241/24` 加公网 NAT）已验证相同救援与写盘流程；最终通过公网 HTTPS 登录，WAN1 API 读回静态地址、网关及 VNIC MAC，本地插件市场 API 正常。其他 Oracle 机型、其他云厂商和失败后的自动恢复仍未经真实 VPS 验证。
+- 云耀 BIOS VPS（Debian 12、30 GiB VirtIO 单盘、`eth0` 公网静态地址 `45.125.12.138/24`、网关 `45.125.12.254`）已验证预检、救援 SSH/进度页、镜像校验与写盘、最终 HTTPS 管理员登录、WAN1 网卡/IP/网关及本地插件市场页面/API。首次安装在写盘前被救援内核哈希校验阻止：上游滚动 `netboot/` 目录的文件已变化。修复后仅爱快安装路径使用 Alpine 3.24.3 的固定 HTTPS 救援文件，并保留内核和 initramfs 的哈希校验。
 
-救援启动代码引用 `bin456789/reinstall` 的提交 `54fae2067557b3c0ca49e7c9ce03bca63c793f8c`（GPL-3.0），并在准备救援环境前校验随包源码的哈希。安装脚本与路由器镜像分开交付。公开 GitHub Release 可匿名下载镜像；镜像和脚本均不应包含 GitHub 登录信息。救援内核和 initramfs 在准备阶段会按固定的 SHA-256 校验，但救援阶段仍依赖上游 Alpine 仓库提供的模块与软件包，尚未做到完全离线或全部依赖锁定。
+救援启动代码引用 `bin456789/reinstall` 的提交 `54fae2067557b3c0ca49e7c9ce03bca63c793f8c`（GPL-3.0），并在准备救援环境前校验随包源码的哈希。安装脚本与路由器镜像分开交付。公开 GitHub Release 可匿名下载镜像；镜像和脚本均不应包含 GitHub 登录信息。救援内核、initramfs 和 modloop 使用 Alpine 3.24.3 的固定 HTTPS 路径；前两者在准备阶段按固定的 SHA-256 校验。救援阶段仍依赖上游 Alpine 仓库提供的软件包，尚未做到完全离线或全部依赖锁定。
